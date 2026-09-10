@@ -13,15 +13,85 @@ from cron.scheduler import (
     SILENT_MARKER,
     _build_job_prompt,
     _deliver_result,
+    _image_only_failure_notice,
     _merge_mcp_into_per_job_toolsets,
     _resolve_cron_enabled_toolsets,
     _resolve_delivery_target,
+    _strip_preamble_for_image_job,
     _summarize_cron_failure_for_delivery,
     run_job,
 )
 from cron.scheduler_delivery import _resolve_origin, _send_media_via_adapter
 from tools.env_passthrough import clear_env_passthrough
 from tools.credential_files import clear_credential_files
+
+
+class TestStripPreambleForImageJob:
+    """Paulo directive 2026-08-21: image-only cron posts are the bare MEDIA line."""
+
+    def test_drops_verification_chatter_keeps_media(self):
+        response = (
+            "Image verified: 1.5 MB, 720x1280 PNG, copied into the artifact directory. "
+            "Final delivery:\n"
+            "\n"
+            "MEDIA:/Users/paulo/.hermes/cron/artifacts/foo/infographic.png"
+        )
+        out = _strip_preamble_for_image_job(response)
+        assert out == "MEDIA:/Users/paulo/.hermes/cron/artifacts/foo/infographic.png"
+
+    def test_keeps_failure_fallback_text_without_media(self):
+        response = (
+            "Daily Chess Mate\n"
+            "Issues: Infographic generation failed: 429 usage_limit_reached"
+        )
+        assert _strip_preamble_for_image_job(response) == response
+
+    def test_multiple_media_lines_last_wins(self):
+        response = (
+            "MEDIA:/path/partial.png\n"
+            "Image generated (2.0 MB PNG), final:\n"
+            "MEDIA:/path/final.png"
+        )
+        out = _strip_preamble_for_image_job(response)
+        assert out == "MEDIA:/path/final.png"
+
+    def test_single_media_line_passthrough(self):
+        assert _strip_preamble_for_image_job("MEDIA:/path/only.png") == "MEDIA:/path/only.png"
+
+    def test_empty_response(self):
+        assert _strip_preamble_for_image_job("") == ""
+
+
+class TestImageOnlyFailureNotice:
+    """2026-09-10: image-only cron failures must not leak pipeline essays into the channel."""
+
+    def _compose(self, job, *, success, error=None, final_response=""):
+        from cron.scheduler import _compose_run_delivery
+        return _compose_run_delivery(
+            job, success=success, error=error, final_response=final_response,
+            output_file="/tmp/out.md")
+
+    def test_success_strips_to_last_media_line(self):
+        job = {"id": "j1", "name": "daily-chess-mate", "is_image_only": True}
+        content, *_ = self._compose(
+            job, success=True,
+            final_response="Board verified. Pipeline complete:\n- lots of chatter\nMEDIA:/a/b.png")
+        assert content == "MEDIA:/a/b.png"
+
+    def test_failure_gets_short_notice_not_pipeline_essay(self):
+        job = {"id": "j1", "name": "daily-chess-mate", "is_image_only": True}
+        err = "Agent run failed: exhausted turn budget while auditing puzzle candidates"
+        content, *_rest = self._compose(job, success=False, error=err)
+        assert "didn't post today" in content
+        assert len(content) < 220
+        assert "puzzle candidates" not in content
+
+    def test_non_image_failure_unchanged(self):
+        job = {"id": "j2", "name": "notes", "is_image_only": False}
+        err = "Agent run failed: boom"
+        content, *_rest = self._compose(job, success=False, error=err)
+        assert "didn't post today" not in content
+        assert "boom" in content
 
 
 class TestSummarizeCronFailureForDelivery:

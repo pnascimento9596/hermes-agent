@@ -2525,6 +2525,45 @@ def _classify_delivery_outcome(
     return "suppressed"
 
 
+def _strip_preamble_for_image_job(response: str) -> str:
+    """For image-only cron jobs, deliver exactly one MEDIA: line.
+
+    Paulo directive 2026-08-21: every cron post is the bare image attachment —
+    no blurb, no verification chatter, no file-size narration. Models reliably
+    emit "Image verified: ... Final delivery:" prose before the MEDIA line no
+    matter what the prompt says; this is the runtime guarantee.
+
+    Behavior:
+      - No MEDIA: line present -> return unchanged (text fallback survives).
+      - One MEDIA: line -> return just that line, all prose dropped.
+      - Multiple MEDIA: lines -> return the LAST one (final answer wins;
+        earlier ones are intermediate-turn leftovers).
+
+    Gate at the call site on job.get("is_image_only") AND "MEDIA:" in the
+    response, so non-image jobs and text fallbacks are untouched.
+    """
+    if not response:
+        return response
+    media_re = re.compile(r"^\s*MEDIA:/\S+\s*$", re.IGNORECASE)
+    media_lines = [
+        ln.strip()
+        for ln in response.splitlines()
+        if media_re.match(ln)
+    ]
+    if not media_lines:
+        return response
+    return media_lines[-1]
+
+
+def _image_only_failure_notice(job: dict, error) -> str:
+    """Image-only jobs fail quietly: one short channel line, details stay in logs/output."""
+    job_name = job.get("name") or job.get("id") or "cron job"
+    return (
+        f"⚠️ Scheduled '{job_name}' didn't post today (job error) — nothing to show. "
+        "Details are in the cron run status, ping me to retry."
+    )
+
+
 def _compose_run_delivery(
     job: dict, *, success: bool, error, final_response: str, output_file,
 ) -> tuple[str, bool, bool, bool, Optional[str]]:
@@ -2560,6 +2599,19 @@ def _compose_run_delivery(
             deliver_content = (
                 _summarize_cron_failure_for_delivery(job, error) + _failure_streak_nudge(job)
             )
+    if job.get("is_image_only"):
+        # Paulo directive 2026-08-21 (+2026-09-10 failure clarification): image-only cron
+        # posts are the bare attachment; failure chatter never reaches the channel.
+        if success and "MEDIA:" in deliver_content:
+            _stripped = _strip_preamble_for_image_job(deliver_content)
+            if _stripped != deliver_content:
+                logger.info(
+                    "Job '%s': image-only delivery stripped %d char(s) of preamble",
+                    job["id"], len(deliver_content) - len(_stripped),
+                )
+            deliver_content = _stripped
+        elif not success and deliver_content and not incident_acked:
+            deliver_content = _image_only_failure_notice(job, error)
     return deliver_content, blocked_config, blocked_config_silent, incident_acked, failure_incident_id
 
 
