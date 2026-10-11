@@ -106,6 +106,7 @@ def normalize_model_name(model: str, preserve_dots: bool = False) -> str:
     (``gpt-5.4``) keep dots as part of their canonical form."""
     if model.lower().startswith("anthropic/"):
         model = model[len("anthropic/"):]
+    model = re.sub(r"\[.*?\]$", "", model).strip()
     if not preserve_dots and not _is_bedrock_model_id(model) and model.lower().startswith(("claude-", "anthropic/")):
         # Only convert dots to hyphens for Anthropic/Claude models. See issue #17171.
         model = model.replace(".", "-")
