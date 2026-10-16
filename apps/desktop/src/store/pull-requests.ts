@@ -44,6 +44,19 @@ let scanInFlight = false
 // ends up badged onto it. Never ask.
 const TRUNK_BRANCHES = new Set(['dev', 'develop', 'main', 'master', 'trunk'])
 
+/** True for the trunk (or the repo's own default branch). A PR "for" these is a
+ *  stranger's fork branch or an ancient closed PR that happened to be opened
+ *  from them, never the work in front of you, so no row badges one. */
+export const isTrunkBranch = (branch: null | string | undefined, defaultBranch?: null | string): boolean => {
+  if (!branch) {
+    return false
+  }
+
+  const lower = branch.toLowerCase()
+
+  return TRUNK_BRANCHES.has(lower) || (!!defaultBranch && defaultBranch.toLowerCase() === lower)
+}
+
 export const branchPrKey = (repoRoot: string, branch: string): string => `${repoRoot}\n${branch}`
 /** A PR known only by number (recovered from a transcript), keyed so it can
  *  share the one map. GitHub answers by number just as happily as by branch. */

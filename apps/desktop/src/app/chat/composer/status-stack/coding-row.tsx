@@ -19,7 +19,7 @@ import { useI18n } from '@/i18n'
 import { displayPath } from '@/lib/display-path'
 import { openWorktreeDialog, registerRepoStatusCwd, repoStatusForCwd, repoWorktreesForCwd } from '@/store/coding-status'
 import { notifyError } from '@/store/notifications'
-import { $pullRequestsByBranch, branchPrKey, refreshPullRequests } from '@/store/pull-requests'
+import { $pullRequestsByBranch, branchPrKey, isTrunkBranch, refreshPullRequests } from '@/store/pull-requests'
 
 // Tiny uppercase section header, matching the composer "+" menu's labels.
 const MENU_SECTION = 'text-[0.625rem] font-semibold uppercase tracking-wider text-(--ui-text-tertiary)'
@@ -82,7 +82,10 @@ export const CodingStatusRow = memo(function CodingStatusRow({
   // The branch's PR, so the rail links to it instead of leaving you to go find
   // it. One `gh` lookup for this one branch, TTL-cached in the store and shared
   // with the sidebar's badges.
-  const prBranch = status?.detached ? null : status?.branch || null
+  // Never on the trunk / default branch: GitHub answers "main" with whatever PR
+  // once had that head (a closed #2 here), which is noise, not this work.
+  const prBranch =
+    status?.detached || isTrunkBranch(status?.branch, status?.defaultBranch) ? null : status?.branch || null
 
   useEffect(() => {
     if (resolvedRepoPath && prBranch) {
